@@ -49,10 +49,13 @@ The integration context builder must fetch through `HistoricalDataProvider`; do 
 
 ```powershell
 python -m scripts.run_backtest --scanner TREND_PULLBACK --direction LONG --from 2025-01-01 --to 2026-01-01 --symbols BTCUSDT ETHUSDT
+python -m scripts.export_backtest --run-id 4572b486-41fd-4b64-8f75-a335996514a1 --run-id fc274d7c-6051-4f3b-82a6-c66b0c6e2537
 python -m scripts.optimize_scanner --scanner TREND_PULLBACK --direction LONG --method grid --trials 100
 ```
 
-The provided CLI validates the interface. Deployment-specific wiring (PostgreSQL connection, production `MarketContext` builder, loader credentials) remains intentionally explicit rather than hard-coded.
+`run_backtest` loads canonical 1m candles from PostgreSQL, deterministically resamples the closed 5m/15m/1h/4h bars, invokes the production `TrendPullbackScanner`, evaluates the next 48 1m bars, and persists `bt.run`, `bt.setup`, and `bt.outcome`.  Pass `--production-root` when the production repository is not at `../trad_bot`; database connection settings come from standard `PG*` environment variables.
+
+`export_backtest` creates analysis files under `exports/`: a detailed CSV with one row per setup/outcome, a summary CSV grouped by `run × direction × symbol × regime × month`, and a small JSON manifest.  These files are intended for Excel, pandas, notebooks, or BI tools.
 
 ## Validation protocol
 

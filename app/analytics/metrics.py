@@ -28,8 +28,28 @@ def calculate_metrics(outcomes: Iterable[SignalOutcome]) -> PerformanceMetrics:
     return PerformanceMetrics(len(values), len(entered), len(wins), len(losses), round(len(wins)/len(entered), 6) if entered else 0.0, round(sum(r), 6), round(avg, 6), round(avg, 6), round(sum(wins)/gross_loss, 6) if gross_loss else float("inf") if wins else 0.0, round(max_dd, 6), round(avg/deviation*sqrt(len(r)), 6) if deviation else 0.0, round(avg/downside*sqrt(len(r)), 6) if downside else 0.0, round(mean([o.mfe_r for o in entered]), 6) if entered else 0.0, round(mean([o.mae_r for o in entered]), 6) if entered else 0.0, round(sum(o.result_r-o.fee_slippage_adjusted_result_r for o in entered), 6))
 
 
-def composite_objective(metrics: PerformanceMetrics, *, minimum_trades: int = 100) -> float:
-    """Reward expectancy/quality, penalize drawdown and insufficient sample size."""
-    if metrics.trades < minimum_trades: return float("-inf")
+def passes_edge_filters(metrics: PerformanceMetrics, *, minimum_trades: int = 100, minimum_profit_factor: float = 1.0) -> bool:
+    """Return True only for configurations worth promoting to validation.
+
+    The gate deliberately checks trade count and positive edge before ranking so
+    grid-search cannot promote tiny, lucky samples or negative-expectancy runs.
+    """
+    return (
+        metrics.trades >= minimum_trades
+        and metrics.avg_r > 0
+        and metrics.total_r > 0
+        and metrics.profit_factor > minimum_profit_factor
+    )
+
+
+def composite_objective(metrics: PerformanceMetrics, *, minimum_trades: int = 100, minimum_profit_factor: float = 1.0) -> float:
+    """Rank only configurations passing the research edge filters.
+
+    Criteria: entries/trades >= minimum_trades, avg_r > 0, total_r > 0,
+    profit_factor > 1. Passing variants are rewarded for expectancy and PF, with
+    a drawdown penalty to avoid selecting unstable equity curves.
+    """
+    if not passes_edge_filters(metrics, minimum_trades=minimum_trades, minimum_profit_factor=minimum_profit_factor):
+        return float("-inf")
     pf = min(metrics.profit_factor, 5.0)
     return round(metrics.expectancy + 0.15 * pf + 0.05 * metrics.sharpe - 0.10 * metrics.max_drawdown_r, 6)

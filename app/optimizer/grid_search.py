@@ -15,12 +15,20 @@ def parameter_grid(space: Mapping[str, list[Any]]) -> tuple[dict[str, Any], ...]
     return tuple(dict(zip(names, values)) for values in product(*(space[name] for name in names)))
 
 class GridSearchOptimizer:
-    def __init__(self, build_backtest: Callable[[dict[str, Any]], SignalBacktest], run_kwargs: dict[str, Any], *, minimum_trades: int = 100) -> None:
-        self.build_backtest, self.run_kwargs, self.minimum_trades = build_backtest, run_kwargs, minimum_trades
+    def __init__(self, build_backtest: Callable[[dict[str, Any]], SignalBacktest], run_kwargs: dict[str, Any], *, minimum_trades: int = 100, minimum_profit_factor: float = 1.0) -> None:
+        self.build_backtest = build_backtest
+        self.run_kwargs = run_kwargs
+        self.minimum_trades = minimum_trades
+        self.minimum_profit_factor = minimum_profit_factor
 
     def optimize(self, space: Mapping[str, list[Any]]) -> tuple[OptimizationResult, ...]:
         results = []
         for index, parameters in enumerate(parameter_grid(space), 1):
             result = self.build_backtest(parameters).run(run_id=f"grid-{index:04d}", **self.run_kwargs)
-            results.append(OptimizationResult(parameters, result, composite_objective(result.metrics, minimum_trades=self.minimum_trades)))
+            objective = composite_objective(
+                result.metrics,
+                minimum_trades=self.minimum_trades,
+                minimum_profit_factor=self.minimum_profit_factor,
+            )
+            results.append(OptimizationResult(parameters, result, objective))
         return tuple(sorted(results, key=lambda item: item.objective, reverse=True))
