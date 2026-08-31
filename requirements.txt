@@ -1,0 +1,5 @@
+pg8000==1.31.5
+python-dateutil>=2.9,<3
+pytest>=8,<9
+# Optional, required only for adaptive optimization:
+# optuna>=4,<5
