@@ -1,0 +1,15 @@
+[Unit]
+Description=Edge Research Backfill
+After=postgresql.service
+
+[Service]
+Type=oneshot
+User=deploy
+WorkingDirectory=/opt/trad_bot_backtest
+ExecStart=/opt/trad_bot_backtest/.venv/bin/python -m scripts.backfill_edge_dataset --batch-size 200
+Environment=PGDATABASE=trad_bot_backtest
+StandardOutput=append:/tmp/edge_backfill.log
+StandardError=append:/tmp/edge_backfill.log
+
+[Install]
+WantedBy=multi-user.target
