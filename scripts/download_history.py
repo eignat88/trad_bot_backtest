@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Iterable
@@ -38,19 +39,33 @@ def fetch_batch(symbol: str, interval: str, start_ms: int, end_ms: int) -> list[
     return payload["result"].get("list", [])
 
 
-def download(symbol: str, timeframe: str, start: datetime, end: datetime) -> list[list[str]]:
+def download(symbol: str, timeframe: str, start: datetime, end: datetime, *, workers: int = 1) -> list[list[str]]:
+    """Fetch complete batches concurrently, then return deterministically sorted candles."""
     interval_ms = TIMEFRAME_MS[timeframe]
-    cursor = int(start.timestamp() * 1000)
+    start_ms = int(start.timestamp() * 1000)
     end_ms = int(end.timestamp() * 1000)
-    candles: dict[int, list[str]] = {}
+    ranges: list[tuple[int, int]] = []
+    cursor = start_ms
     while cursor < end_ms:
         batch_end = min(cursor + interval_ms * 1000, end_ms)
-        batch = fetch_batch(symbol, BYBIT_INTERVAL[timeframe], cursor, batch_end)
+        ranges.append((cursor, batch_end))
+        cursor = batch_end
+
+    def fetch_range(batch_range: tuple[int, int]) -> tuple[int, list[list[str]]]:
+        batch_start, batch_end = batch_range
+        return batch_start, fetch_batch(symbol, BYBIT_INTERVAL[timeframe], batch_start, batch_end)
+
+    if workers <= 1:
+        batches = map(fetch_range, ranges)
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            batches = list(executor.map(fetch_range, ranges))
+    candles: dict[int, list[str]] = {}
+    for batch_start, batch in batches:
         for row in batch:
             open_ms = int(row[0])
-            if cursor <= open_ms < end_ms:
+            if batch_start <= open_ms < end_ms:
                 candles[open_ms] = row
-        cursor = batch_end
     return [candles[key] for key in sorted(candles)]
 
 
@@ -98,7 +113,10 @@ def main() -> int:
     parser.add_argument("--db-user", default=os.getenv("PGUSER", "postgres"))
     parser.add_argument("--db-host", default=os.getenv("PGHOST", "localhost"))
     parser.add_argument("--db-port", type=int, default=int(os.getenv("PGPORT", "5432")))
+    parser.add_argument("--workers", type=int, default=1, help="Concurrent Bybit requests per symbol (default: 1)")
     args = parser.parse_args()
+    if args.workers <= 0:
+        parser.error("--workers must be positive")
 
     start, end = parse_range(args.start, is_end=False), parse_range(args.end, is_end=True)
     if start >= end:
@@ -106,7 +124,7 @@ def main() -> int:
     connection = dbapi.connect(user=args.db_user, password=os.getenv("PGPASSWORD"), host=args.db_host, port=args.db_port, database=args.db_name)
     try:
         for symbol in args.symbols:
-            rows = download(symbol.upper(), args.timeframe, start, end)
+            rows = download(symbol.upper(), args.timeframe, start, end, workers=args.workers)
             inserted = upsert_candles(connection, symbol.upper(), args.exchange, args.timeframe, rows)
             print(f"{symbol.upper()} {args.timeframe}: upserted {inserted} candles")
     finally:

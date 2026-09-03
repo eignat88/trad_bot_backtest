@@ -17,6 +17,7 @@ Local research environment for historical testing and optimization of the **exis
 - `app/scanners`: bridge to the `D:\py_pro\trad_bot` scanner modules.
 - `app/backtest`: Level 1 signal/outcome engine. Portfolio simulation is intentionally a later level.
 - `app/analytics`: expectancy, drawdown, Sharpe/Sortino, composite objective and walk-forward windows.
+- `app/edge_research`: versioned point-in-time datasets, independent signal-path outcomes, temporal holdouts, bootstrap-supported conditional-edge discovery.
 - `app/optimizer`: deterministic grid search.
 - `app/db/schema.sql`: local PostgreSQL DDL.
 
@@ -56,6 +57,38 @@ python -m scripts.optimize_scanner --scanner TREND_PULLBACK --direction LONG --m
 `run_backtest` loads canonical 1m candles from PostgreSQL, deterministically resamples the closed 5m/15m/1h/4h bars, invokes the production `TrendPullbackScanner`, evaluates the next 48 1m bars, and persists `bt.run`, `bt.setup`, and `bt.outcome`.  Pass `--production-root` when the production repository is not at `../trad_bot`; database connection settings come from standard `PG*` environment variables.
 
 `export_backtest` creates analysis files under `exports/`: a detailed CSV with one row per setup/outcome, a summary CSV grouped by `run × direction × symbol × regime × month`, and a small JSON manifest.  These files are intended for Excel, pandas, notebooks, or BI tools.
+
+## Edge research
+
+`app/db/schema.sql` now includes a point-in-time research layer: `dds.market_context_snapshot`, `dds.setup_feature_snapshot`, `dds.setup_confluence`, and independent `dds.signal_outcome`.  `mart.edge_dataset` is the stable one-row-per-setup input for analysis.  Feature snapshots are versioned (`feature_set_version`) and must be frozen before outcome evaluation; do not overwrite historical snapshots when feature formulas change.
+
+Use chronological discovery/validation, never random splitting.  For a populated mart, a basic candidate scan is:
+
+```powershell
+python -m scripts.discover_edges --scanner BREAKOUT_RETEST --direction LONG --feature rsi_14 --feature volume_zscore --feature atr_percentile_30d --min-samples 50
+```
+
+The command reports quantile regions selected only on the earlier period, with their fixed-rule holdout expectancy and a bootstrap probability that mean R is positive.  Treat these as candidates: require stable walk-forward/OOS performance before promoting a condition to a production scanner filter.
+
+Before discovery, run `python -m scripts.validate_edge_dataset`. It fails closed on a missing research schema, future-dated snapshots, outcome values stored as features, invalid MFE/MAE signs, a mart grain duplicate, insufficient feature/outcome coverage, or excessive NULL core features.
+
+### Historical backfill
+
+Apply `app/db/schema.sql`, then materialize the research layer from historical `bt.setup` and canonical 1m `market.candle` data:
+
+```powershell
+# Safe inspection: calculate rows but do not write them.
+python -m scripts.backfill_edge_dataset --scanner LIQUIDITY_REVERSAL --limit 100 --dry-run
+
+# Smoke backfill, then validate the persisted result.
+python -m scripts.backfill_edge_dataset --scanner LIQUIDITY_REVERSAL --limit 100 --batch-size 25
+python -m scripts.validate_edge_dataset
+
+# Full range (idempotent UPSERTs permit resumes/re-runs).
+python -m scripts.backfill_edge_dataset --from 2025-01-01 --to 2026-01-01 --batch-size 500
+```
+
+The backfill calculates features from candles at or before `bt.setup.detected_at`; independent post-signal outcomes use only candles after detection through each requested horizon. It also stores same-window scanner confluence and point-in-time BTC/breadth context.
 
 ## Validation protocol
 
